@@ -17,7 +17,7 @@ function morphToUser(userId)
         ["BodyColors"] = true
     }
     
-    for _, item in ipairs(character:GetChildren()) do
+    for _, item in ipairs(character:GetDescendants()) do
         if toRemove[item.ClassName] then
             item:Destroy()
         end
