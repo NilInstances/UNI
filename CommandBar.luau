@@ -189,7 +189,7 @@ end)
 cmd("top", function(nm)
     for _,d in pairs(workspace:GetDescendants()) do
         if d.Name == nm and d:IsA("BasePart") then
-            c:SetPrimaryPartCFrame(v.CFrame)
+            c:SetPrimaryPartCFrame(d.CFrame)
         end
     end
 end)
