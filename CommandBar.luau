@@ -11,6 +11,7 @@ local rs = cloneref(game:GetService("RunService"))
 local hs = cloneref(game:GetService("HttpService"))
 local gs = cloneref(game:GetService("GuiService"))
 local ts = cloneref(game:GetService("TweenService"))
+local mps = cloneref(game:GetService("MarketplaceService"))
 local tps = cloneref(game:GetService("TeleportService"))
 local tcs = cloneref(game:GetService("TextChatService"))
 local rps = cloneref(game:GetService("ReplicatedStorage"))
@@ -72,8 +73,8 @@ main.Size = UDim2.new(1, 0, 0.02, 0)
 main.BorderSizePixel = 0
 main.BackgroundTransparency = 0.2
 
-local uiCorner = Instance.new("UICorner", main)
-uiCorner.CornerRadius = UDim.new(0, 4)
+local uc = Instance.new("UICorner", main)
+uc.CornerRadius = UDim.new(0, 4)
 
 local gui = Instance.new("TextBox", main)
 gui.BackgroundTransparency = 1
@@ -244,6 +245,45 @@ cmd("reset", function()
     h.Health = 0
 end)
 
+cmd("a", function(id)
+    local a = Instance.new("Animation")
+    a.AnimationId = "rbxassetid://"..id
+    local t = h:LoadAnimation(a)
+    t:Play()
+end)
+
+cmd("ca", function()
+    local fnd = ""
+
+    for _,v in pairs(h:GetPlayingAnimationTracks()) do
+        local aid = v.Animation.AnimationId
+        local asid = aid:find("rbxassetid://") and animationId:match("%d+")
+
+        if not string.find(aid, "507768375") and not string.find(aid, "180435571") then
+            if asid then
+                local suc, res = pcall(function()
+                    return mps:GetProductInfo(tonumber(asid)).Name
+                end)
+                local nm = suc and res or "Failed to get name"
+                fnd = "Name: " .. nm .. "\nAnimation Id: " .. aid
+            else
+                fnd = "Animation Id: " .. aid
+            end
+        end
+    end
+
+        if found ~= "" then
+            setclipboard(fnd)
+        else
+            ntf("No animations to copy")
+        end
+end)
+
+cmd("sa", function()
+	for i,v in next, h:GetPlayingAnimationTracks() do
+		v:Stop()
+	end
+end)
 cmd("tsp", function(n)
     tsp = tonumber(n) or 1
 end)
