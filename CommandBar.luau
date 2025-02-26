@@ -444,15 +444,6 @@ cmd("vol", function(n)
     UserSettings():GetService("UserGameSettings").MasterVolume = tonumber(n) / 10
 end)
 
-cmd("cmds", function()
-    local commandList = "Commands:\n"
-    for name, _ in pairs(cmds) do
-        commandList = commandList .. name .. "\n"
-    end
-    setclipboard(commandList)
-end)
-
-
 cmd("fps", function(n)
     if setfpscap and type(setfpscap) == "function" then
         return setfpscap(n)
@@ -479,6 +470,15 @@ cmd("lc", function()
     else
         cam.CameraType = Enum.CameraType.Fixed
     end
+end)
+
+cmd("cmds", function()
+    local txt = "Commands:\n"
+    for k, _ in pairs(cmds) do
+        txt = txt .. k .. "\n"
+    end
+    setclipboard(txt)
+    ntf("Copied commands to clipboard")
 end)
 
 local ui = {}
@@ -521,3 +521,5 @@ gui:GetPropertyChangedSignal("Text"):Connect(function()
     gui.Text = gui.Text:gsub(";", "")
     Ac()
 end)
+
+ntf("Command Bar loaded, type "cmds" to see the commands.")
