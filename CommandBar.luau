@@ -12,7 +12,6 @@ local hs = cloneref(game:GetService("HttpService"))
 local gs = cloneref(game:GetService("GuiService"))
 local ts = cloneref(game:GetService("TweenService"))
 local mps = cloneref(game:GetService("MarketplaceService"))
-local tps = cloneref(game:GetService("TeleportService"))
 local tcs = cloneref(game:GetService("TextChatService"))
 local rps = cloneref(game:GetService("ReplicatedStorage"))
 local p = ps.LocalPlayer
