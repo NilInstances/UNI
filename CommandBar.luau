@@ -444,6 +444,15 @@ cmd("vol", function(n)
     UserSettings():GetService("UserGameSettings").MasterVolume = tonumber(n) / 10
 end)
 
+cmd("cmds", function()
+    local commandList = "Commands:\n"
+    for name, _ in pairs(cmds) do
+        commandList = commandList .. name .. "\n"
+    end
+    setclipboard(commandList)
+end)
+
+
 cmd("fps", function(n)
     if setfpscap and type(setfpscap) == "function" then
         return setfpscap(n)
