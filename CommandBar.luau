@@ -1,5 +1,5 @@
 if loaded then return end
-pcall(function() getgenv().loaded = true end)
+getgenv().loaded = true
 
 local cloneref = cloneref or function(o) return o end
 
@@ -261,11 +261,9 @@ cmd("ca", function()
 
         if not string.find(aid, "507768375") and not string.find(aid, "180435571") then
             if asid then
-                local suc, res = pcall(function()
-                    return mps:GetProductInfo(tonumber(asid)).Name
-                end)
-                local nm = suc and res or "Failed to get name"
-                fnd = "Name: " .. nm .. "\nAnimation Id: " .. aid
+                local name = return mps:GetProductInfo(tonumber(asid)).Name
+                name = name or "Failed to get name"
+                fnd = "Name: " .. name .. "\nAnimation Id: " .. aid
             else
                 fnd = "Animation Id: " .. aid
             end
