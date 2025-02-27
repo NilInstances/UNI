@@ -502,8 +502,8 @@ gui.Focused:Connect(function()
     ui.show()
 end)
 
-gui.FocusLost:Connect(function(p)
-    if p then
+gui.FocusLost:Connect(function(prc)
+    if prc then
         exec(gui.Text)
         ui.hide()
     end
