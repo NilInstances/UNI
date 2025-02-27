@@ -520,5 +520,3 @@ gui:GetPropertyChangedSignal("Text"):Connect(function()
     gui.Text = gui.Text:gsub(";", "")
     Ac()
 end)
-
-ntf("Command Bar loaded, type "cmds" to see the commands.")
