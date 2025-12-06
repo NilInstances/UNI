@@ -1,0 +1,1364 @@
+if getgenv().AdvanCMD then
+	getgenv().AdvanCMD:Unload()
+end
+
+-- // Services
+local Services = setmetatable({}, {
+	__index = function(self, Name)
+		local Service = cloneref(game:GetService(Name))
+		rawset(self, Name, Service)
+		return Service
+	end,
+})
+
+local ReplicatedStorage = Services.ReplicatedStorage
+local TextChatService = Services.TextChatService
+local TeleportService = Services.TeleportService
+local RunService = Services.RunService
+local InputService = Services.UserInputService
+local HttpService = Services.HttpService
+local StarterGui = Services.StarterGui
+local GuiService = Services.GuiService
+local Workspace = Services.Workspace
+local Players = Services.Players
+
+-- // Globals
+local strSub = string.sub
+local strRep = string.rep
+local strLower = string.lower
+local strMatch = string.match
+local strGsub = string.gsub
+local strFind = string.find
+
+for _, Folder in {"AdvanCMD", "AdvanCMD/Configs"} do
+	if not isfolder(Folder) then
+		makefolder(Folder)
+	end
+end
+
+-- // Vars
+local Prefixes = {";"}
+local ToggleKey = Enum.KeyCode.Semicolon
+
+local LocalPlayer = Players.LocalPlayer
+local LocalCharacter = LocalPlayer.Character
+local LocalHumanoid = LocalCharacter and LocalCharacter:FindFirstChildWhichIsA("Humanoid")
+local LocalRoot = LocalCharacter and LocalCharacter:FindFirstChild("HumanoidRootPart")
+
+LocalPlayer.CharacterAdded:Connect(function(New)
+	LocalCharacter = New
+	LocalHumanoid = New:FindFirstChildWhichIsA("Humanoid")
+	LocalRoot = New:FindFirstChild("HumanoidRootPart")
+end)
+
+-- That's a lot of tables
+local Cmds, Keybinds, Aliases, Vars, CmdHistory, CmdCache, Connections, Loops = {}, {}, {}, {}, {}, {}, {}, {}
+local CurSuggestion, CurSuggestionStart
+local MaxHistory, HistoryIdx = 50, 0
+
+local IsMobile = InputService.TouchEnabled and not InputService.KeyboardEnabled
+
+local ScreenGui = Instance.new("ScreenGui", Services.CoreGui.RobloxGui)
+ScreenGui.ResetOnSpawn = false
+ScreenGui.OnTopOfCoreBlur = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+local CmdBox = Instance.new("TextBox", ScreenGui)
+CmdBox.Visible = false
+CmdBox.AnchorPoint = Vector2.new(.5, 0)
+CmdBox.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+CmdBox.Position = UDim2.new(.5, 0, 0, 8)
+CmdBox.Size = UDim2.fromOffset(250, 40)
+CmdBox.ClipsDescendants = true
+CmdBox.Font = Enum.Font.Code
+CmdBox.TextStrokeTransparency = 1
+CmdBox.TextColor3 = Color3.new(1, 1, 1)
+CmdBox.PlaceholderColor3 = Color3.fromRGB(140, 140, 140)
+CmdBox.PlaceholderText = "Enter command..."
+CmdBox.TextSize = 14
+CmdBox.Text = ""
+CmdBox.TextXAlignment = Enum.TextXAlignment.Left
+
+Instance.new("UICorner", CmdBox).CornerRadius = UDim.new(0, 8)
+
+local CmdBoxStroke = Instance.new("UIStroke", CmdBox)
+CmdBoxStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+CmdBoxStroke.Color = Color3.new(1, 1, 1)
+CmdBoxStroke.Transparency = .8
+
+local CmdBoxPadding = Instance.new("UIPadding", CmdBox)
+CmdBoxPadding.PaddingLeft = UDim.new(0, 12)
+CmdBoxPadding.PaddingRight = UDim.new(0, 12)
+
+local AutoCompleteLabel = Instance.new("TextLabel", CmdBox)
+AutoCompleteLabel.BackgroundTransparency = 1
+AutoCompleteLabel.Position = UDim2.fromOffset(-12, 0)
+AutoCompleteLabel.Size = UDim2.new(1, 24, 1, 0)
+AutoCompleteLabel.Font = Enum.Font.Code
+AutoCompleteLabel.TextStrokeTransparency = 1
+AutoCompleteLabel.TextColor3 = Color3.fromRGB(100, 100, 100)
+AutoCompleteLabel.TextSize = 14
+AutoCompleteLabel.TextXAlignment = Enum.TextXAlignment.Left
+AutoCompleteLabel.Text = ""
+
+local AutoCompletePadding = Instance.new("UIPadding", AutoCompleteLabel)
+AutoCompletePadding.PaddingLeft = UDim.new(0, 12)
+AutoCompletePadding.PaddingRight = UDim.new(0, 12)
+
+local MobileBtn = Instance.new("TextButton")
+MobileBtn.Size = UDim2.fromOffset(40, 40)
+MobileBtn.Position = UDim2.fromOffset(8, 8)
+MobileBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+MobileBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MobileBtn.Text = ";"
+MobileBtn.Font = Enum.Font.GothamBold
+MobileBtn.TextSize = 24
+MobileBtn.Visible = IsMobile
+MobileBtn.Parent = ScreenGui
+
+Instance.new("UICorner", MobileBtn).CornerRadius = UDim.new(0, 12)
+
+local MobileStroke = Instance.new("UIStroke", MobileBtn)
+MobileStroke.Color = Color3.new(1, 1, 1)
+MobileStroke.Transparency = .8
+
+-- // Helper funcs
+local function Connect(Signal, Callback)
+	local Connection = Signal:Connect(Callback)
+	Connections[#Connections + 1] = Connection
+	return Connection
+end
+
+local function AddLoop(Name, Callback)
+	if Loops[Name] then
+		Loops[Name]:Disconnect()
+	end
+
+	Loops[Name] = RunService.Heartbeat:Connect(Callback)
+	Connections[#Connections + 1] = Loops[Name]
+end
+
+local function RemoveLoop(Name)
+	if Loops[Name] then
+		Loops[Name]:Disconnect()
+		Loops[Name] = nil
+	end
+end
+
+local function RebuildCmdCache()
+	local CacheSize, ReturnsSize = 0, 0
+
+	for _ in Cmds do CacheSize += 1 end
+	for _ in Aliases do CacheSize += 1 end
+
+	CmdCache = table.create(CacheSize)
+	ReturnsValueCache = {}
+
+	local Seen, Idx, ReturnsIdx = {}, 0, 0
+
+	for Name, Cmd in Cmds do
+		Name = strLower(Name)
+		if not Seen[Name] then
+			Seen[Name] = true
+			Idx += 1
+			CmdCache[Idx] = Name
+			if Cmd.ReturnsValue then
+				ReturnsIdx += 1
+				ReturnsValueCache[ReturnsIdx] = Name
+			end
+		end
+	end
+
+	for Alias, Target in Aliases do
+		Alias = strLower(Alias)
+		if not Seen[Alias] then
+			Seen[Alias] = true
+			Idx += 1
+			CmdCache[Idx] = Alias
+			local Cmd = Cmds[Target]
+			if Cmd and Cmd.ReturnsValue then
+				ReturnsIdx += 1
+				ReturnsValueCache[ReturnsIdx] = Alias
+			end
+		end
+	end
+
+	table.sort(CmdCache)
+	table.sort(ReturnsValueCache)
+end
+
+local function GetCmd(Name)
+	if not Name then return nil end
+	Name = strLower(Name)
+	return Cmds[Name] or Cmds[Aliases[Name]]
+end
+
+local function GetAutoComplete(Input, OnlyReturnsValue)
+	if #Input == 0 then return nil end
+
+	Input = strLower(Input)
+	local InputLen = #Input
+
+	for _, CmdName in OnlyReturnsValue and ReturnsValueCache or CmdCache do
+		if strSub(CmdName, 1, InputLen) == Input then
+			return CmdName
+		end
+	end
+
+	return nil
+
+end
+
+local function UpdateAutoComplete()
+	local Text = CmdBox.Text
+	local TextLen = #Text
+
+	if TextLen == 0 then
+		AutoCompleteLabel.Text = ""
+		CurSuggestion = nil
+		CurSuggestionStart = nil
+		return
+	end
+
+	local SegmentStart, i, InQuotes = 1, 1, false
+
+	while i <= TextLen do
+		local Char = strSub(Text, i, i)
+		if Char == '"' then
+			InQuotes = not InQuotes
+		elseif Char == '&' and strSub(Text, i + 1, i + 1) == '&' and not InQuotes then
+			SegmentStart = i + 2
+			i += 1
+		end
+		i += 1
+	end
+
+	local Segment = strSub(Text, SegmentStart)
+	local SegmentLen = #Segment
+
+	local WordCount = 0
+	local CurWord = ""
+	local CurWordStart = SegmentStart
+	local InParens = 0
+	InQuotes = false
+
+	for j = 1, SegmentLen do
+		local Char = strSub(Segment, j, j)
+		local AbsPos = SegmentStart + j - 1
+
+		if Char == '"' and InParens == 0 then
+			InQuotes = not InQuotes
+			CurWord ..= Char
+		elseif Char == '(' and not InQuotes then
+			if #CurWord > 0 then
+				WordCount += 1
+				CurWord = ""
+			end
+			InParens += 1
+		elseif Char == ')' and not InQuotes then
+			InParens = math.max(0, InParens - 1)
+			if #CurWord > 0 then
+				CurWord = ""
+			end
+		elseif Char == ' ' and not InQuotes and InParens == 0 then
+			if #CurWord > 0 then
+				WordCount += 1
+				CurWord = ""
+			end
+		elseif Char == ' ' and not InQuotes and InParens > 0 then
+			if #CurWord > 0 then
+				CurWord = ""
+			end
+		else
+			if #CurWord == 0 then
+				CurWordStart = AbsPos
+			end
+			CurWord ..= Char
+		end
+	end
+
+	local CurWordLen = #CurWord
+
+	if CurWordLen == 0 then
+		AutoCompleteLabel.Text = ""
+		CurSuggestion = nil
+		CurSuggestionStart = nil
+		return
+	end
+
+	local OnlyReturnsValue = InParens > 0 or WordCount > 0
+	local Suggestion = GetAutoComplete(CurWord, OnlyReturnsValue)
+
+	CurSuggestion = Suggestion
+	CurSuggestionStart = CurWordStart
+
+	if Suggestion and Suggestion ~= strLower(CurWord) then
+		local Padding = strRep(" ", CurWordStart - 1 + CurWordLen)
+		AutoCompleteLabel.Text = Padding .. strSub(Suggestion, CurWordLen + 1)
+	else
+		AutoCompleteLabel.Text = ""
+		CurSuggestion = nil
+	end
+end
+
+local function AcceptAutoComplete()
+	if not CurSuggestion or not CurSuggestionStart then return false end
+
+	local Text = CmdBox.Text
+	local BeforeWord = strSub(Text, 1, CurSuggestionStart - 1)
+
+	CmdBox.Text = BeforeWord .. CurSuggestion .. " "
+
+	task.delay(0, function()
+		CmdBox.Text = strGsub(CmdBox.Text, "\t", "")
+	end)
+
+	CmdBox.CursorPosition = #CmdBox.Text + 1
+	CurSuggestion = nil
+	CurSuggestionStart = nil
+	AutoCompleteLabel.Text = ""
+
+	return true
+
+end
+
+local function ToggleCmdBox(ForceState)
+	local NewState = ForceState ~= nil and ForceState or not CmdBox.Visible
+	CmdBox.Visible = NewState
+
+	if NewState then
+		HistoryIdx = 0
+		CurSuggestion = nil
+		CurSuggestionStart = nil
+		AutoCompleteLabel.Text = ""
+		CmdBox:CaptureFocus()
+
+		CmdBox:GetPropertyChangedSignal("Text"):Once(function()
+			CmdBox.Text = ""
+		end)
+	else
+		CmdBox:ReleaseFocus()
+	end
+
+end
+
+local function GetRawStr(Input)
+	local Replacements = {
+		["&amp;"] = "&",
+		["&lt;"] = "<",
+		["&gt;"] = ">",
+		["&quot;"] = '"',
+		["&apos;"] = "'",
+	}
+
+
+	for Ent, Char in Replacements do
+		Input = strGsub(Input, Ent, Char)
+	end
+
+	return Input
+
+end
+
+local function ParseArgs(Input)
+	local Args = {}
+	local ArgsIdx = 0
+	local Cur = ""
+	local InQuotes = false
+	local InParens = 0
+	local CurQuoted = false
+	local CurIsParen = false
+	local InputLen = #Input
+
+	for i = 1, InputLen do
+		local Char = strSub(Input, i, i)
+
+		if Char == '"' and InParens == 0 then
+			if not InQuotes then
+				CurQuoted = true
+			end
+			InQuotes = not InQuotes
+		elseif Char == '(' and not InQuotes then
+			if InParens == 0 then
+				if #Cur > 0 then
+					ArgsIdx += 1
+					Args[ArgsIdx] = {Cur, CurQuoted, false}
+					Cur = ""
+					CurQuoted = false
+				end
+				CurIsParen = true
+			else
+				Cur ..= Char
+			end
+			InParens += 1
+		elseif Char == ')' and not InQuotes then
+			InParens -= 1
+			if InParens == 0 then
+				if #Cur > 0 then
+					ArgsIdx += 1
+					Args[ArgsIdx] = {Cur, false, CurIsParen}
+					Cur = ""
+					CurIsParen = false
+				end
+			else
+				Cur ..= Char
+			end
+		elseif Char == ' ' and not InQuotes and InParens == 0 then
+			if #Cur > 0 then
+				ArgsIdx += 1
+				Args[ArgsIdx] = {Cur, CurQuoted, CurIsParen}
+				Cur = ""
+				CurQuoted = false
+				CurIsParen = false
+			end
+		else
+			Cur ..= Char
+		end
+	end
+
+	if #Cur > 0 then
+		ArgsIdx += 1
+		Args[ArgsIdx] = {Cur, CurQuoted, CurIsParen}
+	end
+
+	return Args
+end
+
+
+
+local function SplitCmds(Input)
+	local Result = {}
+	local ResultIdx = 0
+	local Cur = ""
+	local InQuotes = false
+	local i = 1
+	local InputLen = #Input
+
+	while i <= InputLen do
+		local Char = strSub(Input, i, i)
+
+		if Char == '"' then
+			InQuotes = not InQuotes
+			Cur ..= Char
+		elseif Char == '&' and strSub(Input, i + 1, i + 1) == '&' and not InQuotes then
+			local Trimmed = strMatch(Cur, "^%s*(.-)%s*$")
+			if #Trimmed > 0 then
+				ResultIdx += 1
+				Result[ResultIdx] = Trimmed
+			end
+			Cur = ""
+			i += 1
+		else
+			Cur ..= Char
+		end
+
+		i += 1
+	end
+
+	local Trimmed = strMatch(Cur, "^%s*(.-)%s*$")
+	if #Trimmed > 0 then
+		ResultIdx += 1
+		Result[ResultIdx] = Trimmed
+	end
+
+	return Result
+
+end
+
+local function SubVars(Args)
+	local Result = table.create(#Args)
+	for i, Arg in Args do
+		local Value = Arg[1]
+
+		if type(Value) == "string" and strSub(Value, 1, 1) == "$" then
+			Result[i] = {Vars[strSub(Value, 2)] or Value, Arg[2], Arg[3]}
+		else
+			Result[i] = Arg
+		end
+	end
+	return Result
+end
+
+local ExecCmd
+
+local function EvalParenExprs(Args)
+	local Result = table.create(#Args)
+	for i, Arg in Args do
+		if Arg[3] and type(Arg[1]) == "string" then
+			local ReturnValue = ExecCmd(Arg[1])
+			Result[i] = {ReturnValue, true}
+		else
+			Result[i] = {Arg[1], Arg[2]}
+		end
+	end
+	return Result
+end
+
+local function ProcessArgs(Args, StartIdx)
+	StartIdx = StartIdx or 1
+	local Result = {}
+	local ResultIdx = 0
+	local i = StartIdx
+	local ArgsLen = #Args
+
+	while i <= ArgsLen do
+		local Arg = Args[i]
+		local ArgValue = Arg[1]
+
+		if not Arg[2] and type(ArgValue) == "string" then
+			local Cmd = GetCmd(ArgValue)
+
+			if Cmd and Cmd.ReturnsValue then
+				local SubResult = ProcessArgs(Args, i + 1)
+				local ReturnValue = Cmd.Callback(table.unpack(SubResult))
+				ResultIdx += 1
+				Result[ResultIdx] = ReturnValue
+				return Result
+			end
+		end
+
+		ResultIdx += 1
+		Result[ResultIdx] = ArgValue
+		i += 1
+	end
+
+	return Result
+
+end
+
+ExecCmd = function(CmdStr)
+	local Name, ArgsStr = strMatch(CmdStr, "^(%S+)%s*(.*)")
+	if not Name then return end
+
+	local Cmd = GetCmd(Name)
+
+	if Cmd then
+		return Cmd.Callback(table.unpack(ProcessArgs(EvalParenExprs(SubVars(ParseArgs(ArgsStr or ""))))))
+	end
+
+	return nil
+end
+
+local function ExecCmdChain(FullCmd)
+	if #FullCmd == 0 then return end
+
+	CmdHistory[#CmdHistory + 1] = FullCmd
+
+	if #CmdHistory > MaxHistory then
+		table.remove(CmdHistory, 1)
+	end
+
+	task.spawn(function()
+		for _, CmdStr in SplitCmds(FullCmd) do
+			ExecCmd(CmdStr)
+		end
+	end)
+
+end
+
+local function GetPlayers(Arg)
+	if not Arg then return {} end
+
+	local Selector = type(Arg) == "table" and Arg[1] or tostring(Arg)
+	local Quoted = type(Arg) == "table" and Arg[2] or false
+	local LowerSelector = strLower(Selector)
+	local LocalCharacter = LocalPlayer.Character
+	local LocalRoot = LocalCharacter and LocalCharacter:FindFirstChild("HumanoidRootPart")
+
+	if Quoted then
+		local Result = {}
+		for _, Player in Players:GetPlayers() do
+			if strFind(strLower(Player.Name), LowerSelector, 1, true) or 
+				strFind(strLower(Player.DisplayName), LowerSelector, 1, true) then
+				Result[#Result + 1] = Player
+			end
+		end
+		return Result
+	end
+
+	local Selectors = {
+		me = function()
+			return {LocalPlayer}
+		end,
+
+		all = function()
+			return Players:GetPlayers()
+		end,
+
+		others = function()
+			local Result = {}
+			for _, Player in Players:GetPlayers() do
+				if Player ~= LocalPlayer then
+					Result[#Result + 1] = Player
+				end
+			end
+			return Result
+		end,
+
+		random = function()
+			local All = Players:GetPlayers()
+			return #All > 0 and {All[math.random(#All)]} or {}
+		end,
+
+		nearest = function()
+			if not LocalRoot then return {} end
+			local Nearest, NearestDist = nil, math.huge
+			for _, Player in Players:GetPlayers() do
+				if Player ~= LocalPlayer then
+					local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+					if Root then
+						local Dist = (Root.Position - LocalRoot.Position).Magnitude
+						if Dist < NearestDist then
+							Nearest, NearestDist = Player, Dist
+						end
+					end
+				end
+			end
+			return Nearest and {Nearest} or {}
+		end,
+
+		farthest = function()
+			if not LocalRoot then return {} end
+			local Farthest, FarthestDist = nil, 0
+			for _, Player in Players:GetPlayers() do
+				if Player ~= LocalPlayer then
+					local Root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
+					if Root then
+						local Dist = (Root.Position - LocalRoot.Position).Magnitude
+						if Dist > FarthestDist then
+							Farthest, FarthestDist = Player, Dist
+						end
+					end
+				end
+			end
+			return Farthest and {Farthest} or {}
+		end,
+	}
+
+	Selectors.closest = Selectors.nearest
+
+	if Selectors[LowerSelector] then
+		return Selectors[LowerSelector]()
+	end
+
+	local Result = {}
+	for _, Player in Players:GetPlayers() do
+		if strFind(strLower(Player.Name), LowerSelector, 1, true) or 
+			strFind(strLower(Player.DisplayName), LowerSelector, 1, true) then
+			Result[#Result + 1] = Player
+		end
+	end
+	return Result
+
+end
+
+local function Notify(Options)
+	Options.Title = Options.Title or "AdvanCMD"
+	StarterGui:SetCore("SendNotification", Options)
+end
+
+-- // Commands
+Cmds.alias = {
+	Aliases = {"addalias"},
+	Callback = function(Name, Alias)
+		if Name and Alias and Cmds[Name] then
+			Aliases[Alias] = Name
+			RebuildCmdCache()
+		end
+	end,
+}
+
+Cmds.bind = {
+	Callback = function(Key, Cmd, ...)
+		if not Key or not Cmd then return end
+		Keybinds[Key] = Keybinds[Key] or {}
+		Keybinds[Key][Cmd] = {...}
+	end,
+}
+
+Cmds.unbind = {
+	Callback = function(Key, Cmd)
+		if not Key then return end
+		if Keybinds[Key] then
+			if Cmd then
+				Keybinds[Key][Cmd] = nil
+			else
+				Keybinds[Key] = nil
+			end
+		end
+	end,
+}
+
+Cmds.togglekey = {
+	Aliases = {"cmdkey", "boxkey"},
+	Callback = function(Key)
+		local NewKey = Enum.KeyCode[Key]
+		if NewKey then
+			ToggleKey = NewKey
+		end
+	end,
+}
+
+Cmds.prefixes = {
+	Aliases = {"prefix"},
+	Callback = function(...)
+		Prefixes = {... or ";"}
+	end,
+}
+
+Cmds.wait = {
+	Aliases = {"delay"},
+	Callback = function(Seconds)
+		task.wait(tonumber(Seconds) or 1)
+	end,
+}
+
+Cmds["repeat"] = {
+	Aliases = {"loop"},
+	Callback = function(Times, ...)
+		local CmdStr = table.concat({...}, " ")
+		for _ = 1, tonumber(Times) or 1 do
+			ExecCmd(CmdStr)
+		end
+	end,
+}
+
+Cmds.set = {
+	Callback = function(Name, ...)
+		if Name then
+			Vars[Name] = table.concat({...}, " ")
+		end
+	end,
+}
+
+Cmds.unset = {
+	Callback = function(Name)
+		if Name then
+			Vars[Name] = nil
+		end
+	end,
+}
+
+Cmds["print"] = {
+	Callback = function(...)
+		print(...)
+	end,
+}
+
+Cmds["return"] = {
+	ReturnsValue = true,
+	Callback = function(...)
+		return ...
+	end,
+}
+
+Cmds.evaluate = {
+	Aliases = {"eval", "loadstring"},
+	ReturnsValue = true,
+	Callback = function(...)
+		local Str = table.concat({...}, " ")
+		local Fn, Err = loadstring(Str)
+		if Fn then
+			return Fn()
+		end
+		return Err
+	end
+}
+
+Cmds.httpget = {
+	ReturnsValue = true,
+	Callback = function(Link)
+		return game:HttpGet(tostring(Link))
+	end,
+}
+
+Cmds.setclipboard = {
+	Aliases = {"copy", "clipboard"},
+	Callback = function(Value)
+		setclipboard(tostring(Value))
+	end,
+}
+
+Cmds.save = {
+	Aliases = {"savedata", "writedata"},
+	Callback = function(Name, NoNotify)
+		Name = (Name and Name ~= "") and Name or "Config"
+
+		local Data = {
+			Keybinds = Keybinds,
+			Aliases = Aliases,
+			Vars = Vars,
+			Prefixes = Prefixes,
+			ToggleKey = ToggleKey.Name,
+		}
+
+		local Success, Encoded = pcall(HttpService.JSONEncode, HttpService, Data)
+
+		if Success then
+			writefile(`AdvanCMD/Configs/{Name}.json`, Encoded)
+
+			if not NoNotify then
+				Notify({Title = "Config", Text = "Successfully saved config!"})
+			end
+		else
+			Notify({Title = "Config", Text = "An error occurred!"})
+		end
+	end,
+
+}
+
+Cmds.load = {
+	Aliases = {"loaddata"},
+	Callback = function(Name, NoNotify)
+		Name = (Name and Name ~= "") and Name or "Config"
+
+		if not isfile(`AdvanCMD/Configs/{Name}.json`) then
+			return Notify({Title = "Config", Text = "Config doesn't exist!"})
+		end
+
+		local Success, Decoded = pcall(HttpService.JSONDecode, HttpService, readfile(`AdvanCMD/Configs/{Name}.json`))
+
+		if Success then
+			Keybinds = Decoded.Keybinds or {}
+			Aliases = Decoded.Aliases or {}
+			Vars = Decoded.Vars or {}
+			Prefixes = Decoded.Prefixes or {";"}
+			if Decoded.ToggleKey then
+				ToggleKey = Enum.KeyCode[Decoded.ToggleKey] or ToggleKey
+			end
+			RebuildCmdCache()
+
+			if not NoNotify then
+				Notify({Title = "Config", Text = "Successfully loaded config!"})
+			end
+		else
+			Notify({Title = "Config", Text = "An error occurred!"})
+		end
+	end,
+
+}
+
+Cmds.autoload = {
+	Callback = function(Name)
+		Name = (Name and Name ~= "") and Name or "Config"
+		writefile("AdvanCMD/Configs/Autoload", Name)
+		Notify({Title = "Config", Text = `Set '{Name}' as autoload config!`})
+	end,
+}
+
+Cmds.write = {
+	Aliases = {"writefile", "makefile"},
+	Callback = function(Path, Content)
+		writefile(Path, Content)
+	end
+}
+
+Cmds.read = {
+	Aliases = {"readfile"},
+	ReturnsValue = true,
+	Callback = function(Path)
+		if isfile(Path) then
+			return readfile(Path)
+		else
+			Notify({Text = "No such file exists!"})
+		end
+	end
+}
+
+Cmds.del = {
+	Aliases = {"delfile"},
+	Callback = function(Path)
+		if isfile(Path) then
+			Notify({Text = "No such file exists!"})
+		else
+			delfile(Path)
+		end
+	end
+}
+
+Cmds.isfile = {
+	ReturnsValue = true,
+	Callback = function(Path)
+		return isfile(Path)
+	end
+}
+
+Cmds.rejoin = {
+	Aliases = {"rj"},
+	Callback = function()
+		if #Players:GetPlayers() <= 1 then
+			LocalPlayer:Kick("Rejoining...")
+			TeleportService:Teleport(game.PlaceId, LocalPlayer)
+		else
+			TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+		end
+	end
+}
+
+Cmds.serverhop = {
+	Aliases = {"sh", "hop"},
+	Callback = function()
+		local Servers = HttpService:JSONDecode(game:HttpGet(`https://games.roblox.com/v1/games/{game.PlaceId}/servers/Public?sortOrder=Asc&limit=100`))
+		for _, Server in Servers.data or {} do
+			if Server.id ~= game.JobId and Server.playing < Server.maxPlayers then
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, Server.id, LocalPlayer)
+				return
+			end
+		end
+		Notify({Text = "No available servers found!"})
+	end
+}
+
+Cmds.last = {
+	Aliases = {"prev"},
+	Callback = function(Offset)
+		local Idx = #CmdHistory - (tonumber(Offset) or 1)
+		if CmdHistory[Idx] then
+			ExecCmdChain(CmdHistory[Idx])
+		end
+	end,
+}
+
+Cmds.history = {
+	Callback = function(Count)
+		Count = tonumber(Count) or 10
+		local Start = math.max(1, #CmdHistory - Count + 1)
+		for i = Start, #CmdHistory do
+			print(i .. ": " .. CmdHistory[i])
+		end
+	end,
+}
+
+Cmds.clearhistory = {
+	Aliases = {"clrhistory"},
+	Callback = function()
+		table.clear(CmdHistory)
+		Notify({Text = "Command history cleared!"})
+	end,
+}
+
+Cmds.cmds = {
+	Aliases = {"help", "commands"},
+	Callback = function()
+		for Name, Cmd in Cmds do
+			local AliasStr = Cmd.Aliases and " (" .. table.concat(Cmd.Aliases, ", ") .. ")" or ""
+			print(Name .. AliasStr)
+		end
+	end,
+}
+
+Cmds.speed = {
+	Aliases = {"walkspeed", "ws"},
+	Callback = function(Value)
+		if LocalHumanoid then
+			LocalHumanoid.WalkSpeed = tonumber(Value) or 16
+		end
+	end,
+}
+
+Cmds.jumppower = {
+	Callback = function(Value)
+		if LocalHumanoid then
+			LocalHumanoid.UseJumpPower = true
+			LocalHumanoid.JumpPower = tonumber(Value) or 50
+		end
+	end,
+}
+
+Cmds.jumpheight = {
+	Callback = function(Value)
+		if LocalHumanoid then
+			LocalHumanoid.UseJumpPower = false
+			LocalHumanoid.JumpHeight = tonumber(Value) or 7.2
+		end
+	end,
+}
+
+Cmds.gravity = {
+	Callback = function(Value)
+		Workspace.Gravity = tonumber(Value) or 196.2
+	end,
+}
+
+Cmds.hipheight = {
+	Callback = function(Value)
+		if LocalHumanoid then
+			LocalHumanoid.HipHeight = tonumber(Value) or 0
+		end
+	end,
+}
+
+Cmds.sit = {
+	Callback = function()
+		if LocalHumanoid then
+			LocalHumanoid.Sit = true
+		end
+	end,
+}
+
+Cmds.jump = {
+	Callback = function()
+		if LocalHumanoid then
+			LocalHumanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end,
+}
+
+Cmds.reset = {
+	Aliases = {"die", "kill"},
+	Callback = function()
+		if LocalHumanoid then
+			LocalHumanoid.Health = 0
+		end
+	end,
+}
+
+Cmds.health = {
+	Aliases = {"hp"},
+	Callback = function(Value)
+		if LocalHumanoid then
+			LocalHumanoid.Health = tonumber(Value) or 100
+		end
+	end,
+}
+
+Cmds.tp = {
+	Aliases = {"teleport", "goto"},
+	Callback = function(Target)
+		local Players = GetPlayers(Target)
+		if #Players > 0 then
+			local TargetRoot = Players[1].Character and Players[1].Character:FindFirstChild("HumanoidRootPart")
+			if TargetRoot and LocalRoot then
+				LocalRoot.CFrame = TargetRoot.CFrame * CFrame.new(0, 0, 3)
+			end
+		end
+	end,
+}
+
+Cmds.tppos = {
+	Aliases = {"teleportpos", "setpos"},
+	Callback = function(X, Y, Z)
+		if LocalRoot then
+			LocalRoot.CFrame = CFrame.new(tonumber(X) or 0, tonumber(Y) or 0, tonumber(Z) or 0)
+		end
+	end,
+}
+
+Cmds.getpos = {
+	Aliases = {"pos", "position"},
+	ReturnsValue = true,
+	Callback = function()
+		if LocalRoot then
+			local Pos = LocalRoot.Position
+			local PosStr = `{math.floor(Pos.X)}, {math.floor(Pos.Y)}, {math.floor(Pos.Z)}`
+			return PosStr
+		end
+	end,
+}
+
+Cmds.offset = {
+	Callback = function(X, Y, Z)
+		if LocalRoot then
+			LocalRoot.CFrame *= CFrame.new(tonumber(X) or 0, tonumber(Y) or 0, tonumber(Z) or 0)
+		end
+	end,
+}
+
+
+Cmds.fov = {
+	Callback = function(Value)
+		Workspace.CurrentCamera.FieldOfView = tonumber(Value) or 70
+	end,
+}
+
+Cmds.time = {
+	Aliases = {"settime"},
+	Callback = function(Value)
+		Services.Lighting.ClockTime = tonumber(Value) or 14
+	end,
+}
+
+Cmds.chat = {
+	Aliases = {"say"},
+	Callback = function(...)
+		local Message = table.concat({...}, " ")
+
+		local TextChatChannels = TextChatService:FindFirstChild("TextChannels")
+		local RBXGeneral = TextChatChannels and TextChatChannels:FindFirstChild("RBXGeneral")
+	
+		if RBXGeneral then
+			RBXGeneral:SendAsync(Message)
+			return
+		end
+
+		ReplicatedStorage.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(Message, "All")
+	end,
+
+}
+
+Cmds.notify = {
+	Aliases = {"notification", "alert"},
+	Callback = function(...)
+		Notify({Text = table.concat({...}, " ")})
+	end,
+}
+
+Cmds.players = {
+	Aliases = {"listplayers"},
+	Callback = function()
+		for i, Player in Players:GetPlayers() do
+			print(`{i}. {Player.Name} (@{Player.DisplayName})`)
+		end
+	end,
+}
+
+Cmds.playercount = {
+	Aliases = {"pcount"},
+	ReturnsValue = true,
+	Callback = function()
+		return #Players:GetPlayers()
+	end,
+}
+
+Cmds.ping = {
+	Aliases = {"latency"},
+	ReturnsValue = true,
+	Callback = function()
+		local Ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
+		print(`Ping: {Ping}ms`)
+		return Ping
+	end,
+}
+
+Cmds.fps = {
+	Aliases = {"framerate"},
+	ReturnsValue = true,
+	Callback = function()
+		local FPS = math.floor(1 / RunService.RenderStepped:Wait())
+		print(`FPS: {FPS}`)
+		return FPS
+	end,
+}
+
+Cmds.age = {
+	Aliases = {"accountage"},
+	ReturnsValue = true,
+	Callback = function(Target)
+		local Players = GetPlayers(Target)
+		for _, Player in Players do
+			print(`{Player.Name}'s account age: {Player.AccountAge} days`)
+		end
+	end,
+}
+
+Cmds.userid = {
+	Aliases = {"uid"},
+	ReturnsValue = true,
+	Callback = function(Target)
+		local Players = GetPlayers(Target)
+		return #Players > 0 and Players[1].UserId or LocalPlayer.UserId
+	end,
+}
+
+Cmds.btools = {
+	Callback = function()
+		local Backpack = LocalPlayer:FindFirstChild("Backpack")
+		if Backpack then
+			Instance.new("HopperBin", Backpack).BinType = Enum.BinType.Clone
+			Instance.new("HopperBin", Backpack).BinType = Enum.BinType.Hammer
+			Instance.new("HopperBin", Backpack).BinType = Enum.BinType.Grab
+		end
+	end,
+}
+
+Cmds["if"] = {
+	Callback = function(Condition, TrueCmd, ...)
+		local CondNum = tonumber(Condition)
+		local IsTruthy = CondNum and CondNum ~= 0 or (Condition and Condition ~= "" and Condition ~= "false")
+
+		if IsTruthy then
+			ExecCmd(TrueCmd .. " " .. table.concat({...}, " "))
+		end
+	end,
+
+}
+
+Cmds.randnum = {
+	Aliases = {"random", "rand"},
+	ReturnsValue = true,
+	Callback = function(Min, Max)
+		Min = tonumber(Min) or 1
+		Max = tonumber(Max) or 100
+		return math.random(Min, Max)
+	end,
+}
+
+Cmds.math = {
+	Aliases = {"calc", "calculate"},
+	ReturnsValue = true,
+	Callback = function(...)
+		local Expr = table.concat({...}, " ")
+		local Fn, Err = loadstring("return " .. Expr)
+		if Fn then
+			local Success, Result = pcall(Fn)
+			if Success then
+				print(`Result: {Result}`)
+				return Result
+			end
+		end
+		return Err
+	end,
+}
+
+Cmds.unload = {
+	Callback = function()
+		if getgenv().AdvanCMD then
+			getgenv().AdvanCMD:Unload()
+		end
+	end,
+}
+
+for Name, Cmd in Cmds do
+	if Cmd.Aliases then
+		for _, Alias in Cmd.Aliases do
+			Aliases[Alias] = Name
+		end
+	end
+end
+
+RebuildCmdCache()
+
+Connect(InputService.InputBegan, function(Input, Processed)
+	if Processed then return end
+
+	if Input.KeyCode == ToggleKey then
+		ToggleCmdBox()
+		return
+	end
+
+	local KeyName = strLower(Input.KeyCode.Name)
+	if Keybinds[KeyName] then
+		for CmdName, Args in Keybinds[KeyName] do
+			local CmdData = GetCmd(CmdName)
+			if CmdData then
+				task.spawn(CmdData.Callback, table.unpack(Args))
+			end
+		end
+	end
+
+end)
+
+Connect(LocalPlayer.Chatted, function(Message)
+	Message = GetRawStr(Message)
+
+	for _, Prefix in Prefixes do
+		if strSub(Message, 1, #Prefix) == Prefix then
+			ExecCmdChain(strSub(Message, #Prefix + 1))
+			return
+		end
+	end
+
+end)
+
+CmdBox.FocusLost:Connect(function(EnterPressed)
+	if EnterPressed and #CmdBox.Text > 0 then
+		ExecCmdChain(CmdBox.Text)
+		CmdBox.Text = ""
+	end
+	CmdBox.Visible = false
+	AutoCompleteLabel.Text = ""
+	CurSuggestion = nil
+	CurSuggestionStart = nil
+end)
+
+CmdBox:GetPropertyChangedSignal("Text"):Connect(function()
+	HistoryIdx = 0
+	UpdateAutoComplete()
+end)
+
+InputService.InputBegan:Connect(function(Input)
+	if not CmdBox:IsFocused() then return end
+
+	if Input.KeyCode == Enum.KeyCode.Tab then
+		AcceptAutoComplete()
+	elseif Input.KeyCode == Enum.KeyCode.Right then
+		if CurSuggestion and CmdBox.CursorPosition > #CmdBox.Text then
+			AcceptAutoComplete()
+		end
+	elseif Input.KeyCode == Enum.KeyCode.Up then
+		if #CmdHistory > 0 then
+			HistoryIdx = math.min(HistoryIdx + 1, #CmdHistory)
+			CmdBox.Text = CmdHistory[#CmdHistory - HistoryIdx + 1] or ""
+			CmdBox.CursorPosition = #CmdBox.Text + 1
+		end
+	elseif Input.KeyCode == Enum.KeyCode.Down then
+		if HistoryIdx > 0 then
+			HistoryIdx -= 1
+			CmdBox.Text = HistoryIdx > 0 and CmdHistory[#CmdHistory - HistoryIdx + 1] or ""
+			CmdBox.CursorPosition = #CmdBox.Text + 1
+		end
+	elseif Input.KeyCode == Enum.KeyCode.Escape then
+		CmdBox.Text = ""
+		CmdBox:ReleaseFocus()
+	end
+
+end)
+
+MobileBtn.MouseButton1Click:Connect(ToggleCmdBox)
+
+local function Unload()
+	pcall(function()
+		if isfile("AdvanCMD/Configs/Autoload") then
+			Cmds.save.Callback(readfile("AdvanCMD/Configs/Autoload"), true)
+		end
+	end)
+
+	for State, Value in ToggleStates do
+		if Value then
+			ToggleStates[State] = true
+			local UnCmd = Cmds["un" .. strLower(State)]
+			if UnCmd then
+				pcall(UnCmd.Callback)
+			end
+		end
+	end
+
+	for _, Connection in Connections do
+		if Connection then
+			Connection:Disconnect()
+		end
+	end
+
+	for Name in Loops do
+		RemoveLoop(Name)
+	end
+
+	if ScreenGui then
+		ScreenGui:Destroy()
+	end
+
+	getgenv().AdvanCMD = nil
+
+end
+
+getgenv().AdvanCMD = {
+	Connections = Connections,
+	Loops = Loops,
+	ToggleStates = ToggleStates,
+	Cmds = Cmds,
+	Aliases = Aliases,
+	Keybinds = Keybinds,
+	Vars = Vars,
+	ExecCmd = ExecCmd,
+	ExecCmdChain = ExecCmdChain,
+	GetPlayers = GetPlayers,
+	Notify = Notify,
+	Unload = Unload,
+}
+
+
+if isfile("AdvanCMD/Configs/Autoload") then
+	ExecCmd(`load {readfile("AdvanCMD/Configs/Autoload")} 1`)
+end
+
+Notify({Text = "AdvanCMD loaded! Press ; to open"})
